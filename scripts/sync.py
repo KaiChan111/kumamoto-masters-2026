@@ -1,10 +1,11 @@
 """Fetch BWF public daily match cards; never replace verified data on extraction failure."""
-import json, os, re, sys, datetime, pathlib
+import json, os, re, sys, datetime, pathlib, hashlib
 from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 import requests
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 DATA=ROOT/'data'
+DIAG=ROOT/'diagnostics'
 BASE='https://bwfworldtour.bwfbadminton.com/tournament/5216/kumamoto-masters-japan-2026/results/'
 TYPES={'MS','WS','MD','WD','XD'}
 FLAGS={'TPE':'🇹🇼','JPN':'🇯🇵','CHN':'🇨🇳','KOR':'🇰🇷','MAS':'🇲🇾','INA':'🇮🇩','THA':'🇹🇭','IND':'🇮🇳','DEN':'🇩🇰','FRA':'🇫🇷','USA':'🇺🇸','HKG':'🇭🇰','CAN':'🇨🇦','BUL':'🇧🇬','UKR':'🇺🇦','IRL':'🇮🇪','ESP':'🇪🇸'}
@@ -48,10 +49,36 @@ def extract(html,names):
   out.append(dict(id=int(num.group(1)),time=time,court=int(court.group(1)),type=typ.group(1),a=teams[0],b=teams[1],status=status,tw=any(p['country']=='TPE' for team in teams for p in team),star=False))
  return sorted(out,key=lambda m:(m['time'] or '99:99',m['court']))
 
+def diagnose(date, url, response=None, error=None):
+ """Write safe response metadata only; no full third-party page or credentials."""
+ DIAG.mkdir(exist_ok=True)
+ info={'date':date,'url':url,'error':str(error) if error else None}
+ if response is not None:
+  body=response.text
+  soup=BeautifulSoup(body,'html.parser')
+  info.update({'http_status':response.status_code,
+   'content_type':response.headers.get('content-type',''),
+   'response_bytes':len(response.content),
+   'sha256':hashlib.sha256(response.content).hexdigest(),
+   'match_card_count':len(soup.select('.match-card-wrapper')),
+   'title':soup.title.get_text(' ',strip=True)[:150] if soup.title else '',
+   'script_sources':[tag.get('src') for tag in soup.select('script[src]')][:20],
+   'has_next_data':bool(soup.select_one('script#__NEXT_DATA__')),
+   'has_nuxt':('__NUXT__' in body),
+   'has_match_card_string':('match-card-wrapper' in body),
+   'has_captcha_marker':any(x in body.lower() for x in ('captcha','cloudflare challenge','access denied'))})
+ (DIAG/(date+'.json')).write_text(json.dumps(info,ensure_ascii=False,indent=2)+'\n')
+ print('DIAGNOSTIC',json.dumps(info,ensure_ascii=False),flush=True)
+
 def sync(date):
  url=BASE+date
  print('Checking',url)
- r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0 (compatible; KumamotoScheduleViewer/2.0)'})
+ try:
+  r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0 (compatible; KumamotoScheduleViewer/2.1)'})
+ except requests.RequestException as e:
+  diagnose(date,url,error=e)
+  raise
+ diagnose(date,url,response=r)
  r.raise_for_status()
  if 'match-card-wrapper' not in r.text:raise RuntimeError('BWF response has no match cards; likely JS rendering or access block')
  names=load_names();out=extract(r.text,names)
