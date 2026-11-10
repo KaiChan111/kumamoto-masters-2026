@@ -1,0 +1,33 @@
+name: Sync BWF schedule
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Fetch and validate BWF schedule
+        id: fetch
+        continue-on-error: true
+        run: python scripts/sync.py
+      - name: Save latest successful data and sync status
+        if: always()
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update BWF schedule and sync status'
+            git push
+          fi
+      - name: Mark failed sync
+        if: steps.fetch.outcome == 'failure'
+        run: exit 1
