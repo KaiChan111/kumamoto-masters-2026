@@ -18,6 +18,14 @@ jobs:
         id: fetch
         continue-on-error: true
         run: python scripts/sync.py
+      - name: Upload safe diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bwf-fetch-diagnostics
+          path: diagnostics/*.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Save latest successful data and sync status
         if: always()
         run: |
